@@ -1,5 +1,5 @@
-import { prisma } from "@/lib/db";
 import { notFound } from "next/navigation";
+import { ensureSeeded, getPatientWithRelations } from "@/lib/store";
 import { PatientProfileClient } from "./PatientProfileClient";
 
 export const dynamic = "force-dynamic";
@@ -10,50 +10,10 @@ interface PatientPageProps {
 
 export default async function PatientPage({ params }: PatientPageProps) {
   const { id } = await params;
+  await ensureSeeded();
 
-  let patient = await prisma.patient.findUnique({
-    where: { id },
-    include: {
-      reports: {
-        include: { observations: true },
-        orderBy: { createdAt: "desc" },
-      },
-      conflicts: {
-        orderBy: { createdAt: "desc" },
-      },
-      timelineEvents: {
-        orderBy: { createdAt: "desc" },
-      },
-      auditLogs: {
-        orderBy: { createdAt: "desc" },
-      },
-    },
-  });
-
-  if (!patient) {
-    patient = await prisma.patient.findUnique({
-      where: { patientId: id },
-      include: {
-        reports: {
-          include: { observations: true },
-          orderBy: { createdAt: "desc" },
-        },
-        conflicts: {
-          orderBy: { createdAt: "desc" },
-        },
-        timelineEvents: {
-          orderBy: { createdAt: "desc" },
-        },
-        auditLogs: {
-          orderBy: { createdAt: "desc" },
-        },
-      },
-    });
-  }
-
-  if (!patient) {
-    notFound();
-  }
+  const patient = getPatientWithRelations(id);
+  if (!patient) notFound();
 
   const allObservations = patient.reports.flatMap((r) => r.observations);
 
