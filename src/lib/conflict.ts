@@ -1,4 +1,4 @@
-﻿import { prisma } from "./db";
+import { getStore, newId } from "./store";
 import { createTimelineEvent } from "./audit";
 
 export interface DetectedConflict {
@@ -15,25 +15,21 @@ export interface DetectedConflict {
  * Does not make automated clinical decisions; flags for human review.
  */
 export async function detectPatientConflicts(patientId: string): Promise<DetectedConflict[]> {
-  const patient = await prisma.patient.findUnique({
-    where: { id: patientId },
-    include: {
-      reports: {
-        include: { observations: true },
-        orderBy: { createdAt: "desc" },
-      },
-      conflicts: true,
-    },
-  });
-
+  const store = getStore();
+  const patient = store.patients.find((p) => p.id === patientId);
   if (!patient) return [];
 
+  const reports = store.reports
+    .filter((r) => r.patientId === patientId)
+    .map((r) => ({ ...r, observations: store.observations.filter((o) => o.reportId === r.id) }));
+
+  const existingConflicts = store.conflicts.filter((c) => c.patientId === patientId);
   const detected: DetectedConflict[] = [];
 
-  // 1. Check Allergy Inconsistencies between User Intake and Reports
+  // 1. Check Allergy Inconsistencies
   if (patient.allergies) {
     const intakeAllergies = patient.allergies.toLowerCase();
-    for (const rep of patient.reports) {
+    for (const rep of reports) {
       if (rep.rawText) {
         const text = rep.rawText.toLowerCase();
         if (text.includes("no known allergies") || text.includes("nkda") || text.includes("nka")) {
@@ -43,7 +39,6 @@ export async function detectPatientConflicts(patientId: string): Promise<Detecte
               description: "Patient profile records allergies, but clinical report states 'No Known Allergies / NKDA'.",
               valueA: `Intake: "${patient.allergies}"`,
               valueB: `Report "${rep.title}": "No known allergies / NKDA noted"`,
-              reportAId: undefined,
               reportBId: rep.id,
             });
           }
@@ -53,57 +48,47 @@ export async function detectPatientConflicts(patientId: string): Promise<Detecte
   }
 
   // 2. Cross-check Observation Value shifts across multiple reports
-  const observationsByTest: Record<string, Array<{ reportTitle: string; reportId: string; value: string; date: Date | null }>> = {};
-  for (const report of patient.reports) {
+  const observationsByTest: Record<string, Array<{ reportTitle: string; reportId: string; value: string }>> = {};
+  for (const report of reports) {
     for (const obs of report.observations) {
-      const normalizedName = obs.testName.trim().toLowerCase();
-      if (!observationsByTest[normalizedName]) {
-        observationsByTest[normalizedName] = [];
-      }
-      observationsByTest[normalizedName].push({
-        reportTitle: report.title,
-        reportId: report.id,
-        value: obs.value,
-        date: obs.reportDate || report.createdAt,
-      });
+      const name = obs.testName.trim().toLowerCase();
+      if (!observationsByTest[name]) observationsByTest[name] = [];
+      observationsByTest[name].push({ reportTitle: report.title, reportId: report.id, value: obs.value });
     }
   }
 
   for (const [testName, list] of Object.entries(observationsByTest)) {
-    if (list.length >= 2) {
-      const latest = list[0];
-      const previous = list[1];
-      if (latest.value !== previous.value) {
-        // Only log if significant difference in numerical or categorical observation
-        detected.push({
-          category: "TEST_VALUE",
-          description: `Discrepancy observed for "${testName.toUpperCase()}" between consecutive reports.`,
-          valueA: `${latest.reportTitle}: ${latest.value}`,
-          valueB: `${previous.reportTitle}: ${previous.value}`,
-          reportAId: latest.reportId,
-          reportBId: previous.reportId,
-        });
-      }
+    if (list.length >= 2 && list[0].value !== list[1].value) {
+      detected.push({
+        category: "TEST_VALUE",
+        description: `Discrepancy observed for "${testName.toUpperCase()}" between consecutive reports.`,
+        valueA: `${list[0].reportTitle}: ${list[0].value}`,
+        valueB: `${list[1].reportTitle}: ${list[1].value}`,
+        reportAId: list[0].reportId,
+        reportBId: list[1].reportId,
+      });
     }
   }
 
-  // Persist newly detected conflicts to database if not already logged
+  // Persist newly detected conflicts to in-memory store
   for (const item of detected) {
-    const exists = patient.conflicts.some(
+    const exists = existingConflicts.some(
       (c) => c.category === item.category && c.description === item.description
     );
     if (!exists) {
-      await prisma.conflict.create({
-        data: {
-          patientId,
-          reportAId: item.reportAId || null,
-          reportBId: item.reportBId || null,
-          category: item.category,
-          description: item.description,
-          valueA: item.valueA,
-          valueB: item.valueB,
-          status: "NEEDS_REVIEW",
-        },
+      store.conflicts.push({
+        id: newId(),
+        patientId,
+        reportAId: item.reportAId || null,
+        reportBId: item.reportBId || null,
+        category: item.category,
+        description: item.description,
+        valueA: item.valueA,
+        valueB: item.valueB,
+        status: "NEEDS_REVIEW",
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: new Date(),
       });
 
       await createTimelineEvent({
