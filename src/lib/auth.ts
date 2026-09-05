@@ -1,15 +1,26 @@
-﻿import bcrypt from "bcryptjs";
+/**
+ * auth.ts — Zero-config auth
+ *
+ * Session tokens are still cookie-based (base64 encoded). The difference is
+ * that user lookup against the database has been removed. A single hardcoded
+ * demo clinician account is available without any env var setup.
+ */
 import { cookies } from "next/headers";
-import { prisma } from "./db";
 
 const SESSION_COOKIE_NAME = "medlens_session";
 
 export async function hashPassword(plainText: string): Promise<string> {
-  return await bcrypt.hash(plainText, 10);
+  // Use Web Crypto API (available in all environments including Vercel Edge)
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plainText + "medlens_salt_2026");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function verifyPassword(plainText: string, hashed: string): Promise<boolean> {
-  return await bcrypt.compare(plainText, hashed);
+  const candidateHash = await hashPassword(plainText);
+  return candidateHash === hashed;
 }
 
 export interface SessionUser {
@@ -19,9 +30,6 @@ export interface SessionUser {
   role: string;
 }
 
-/**
- * Creates an encrypted/signed session token payload
- */
 export function createSessionToken(user: SessionUser): string {
   const payload = {
     sub: user.id,
@@ -29,7 +37,7 @@ export function createSessionToken(user: SessionUser): string {
     name: user.name,
     role: user.role,
     iat: Date.now(),
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 days
+    exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
   };
   return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
@@ -38,15 +46,8 @@ export function parseSessionToken(token: string): SessionUser | null {
   try {
     const raw = Buffer.from(token, "base64url").toString("utf-8");
     const data = JSON.parse(raw);
-    if (!data || !data.sub || (data.exp && Date.now() > data.exp)) {
-      return null;
-    }
-    return {
-      id: data.sub,
-      email: data.email,
-      name: data.name,
-      role: data.role || "CLINICIAN",
-    };
+    if (!data || !data.sub || (data.exp && Date.now() > data.exp)) return null;
+    return { id: data.sub, email: data.email, name: data.name, role: data.role || "CLINICIAN" };
   } catch {
     return null;
   }
