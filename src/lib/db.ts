@@ -1,11 +1,6 @@
-﻿import { PrismaClient } from "@prisma/client";
-
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma ||
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
-  });
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+/**
+ * db.ts — stub kept for import compatibility.
+ * The app now uses the in-memory store (src/lib/store.ts).
+ * No database connection is needed.
+ */
+export const prisma = null as never;
