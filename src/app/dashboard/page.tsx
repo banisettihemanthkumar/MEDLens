@@ -1,10 +1,8 @@
-﻿import Link from "next/link";
-import { prisma } from "@/lib/db";
-import { seedDemoData } from "@/lib/demo";
+import Link from "next/link";
+import { ensureSeeded, getDashboardStats } from "@/lib/store";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { StatCard } from "@/components/ui/StatCard";
 import { VerificationBadge } from "@/components/ui/VerificationBadge";
-import { ProvenanceBadge } from "@/components/ui/ProvenanceBadge";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import {
   Users,
@@ -14,23 +12,15 @@ import {
   UserPlus,
   ArrowRight,
   AlertTriangle,
-  Upload,
   Activity,
-  GitCompare,
-  FileCheck
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  // Check if patients exist; if not, automatically seed demo data!
-  const patientCount = await prisma.patient.count();
-  if (patientCount === 0) {
-    await seedDemoData();
-  }
+  await ensureSeeded();
 
-  // Fetch dashboard summary metrics
-  const [
+  const {
     totalPatients,
     reportsProcessed,
     pendingObservations,
@@ -39,41 +29,7 @@ export default async function DashboardPage() {
     recentReports,
     activeConflicts,
     recentAuditLogs,
-  ] = await Promise.all([
-    prisma.patient.count(),
-    prisma.medicalReport.count(),
-    prisma.medicalObservation.count({ where: { verificationStatus: "PENDING_REVIEW" } }),
-    prisma.medicalObservation.count({ where: { verificationStatus: "VERIFIED" } }),
-    prisma.patient.findMany({
-      take: 8,
-      orderBy: { updatedAt: "desc" },
-      include: {
-        reports: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-        },
-      },
-    }),
-    prisma.medicalReport.findMany({
-      take: 5,
-      orderBy: { createdAt: "desc" },
-      include: {
-        patient: true,
-        observations: true,
-      },
-    }),
-    prisma.conflict.findMany({
-      where: { status: "NEEDS_REVIEW" },
-      take: 4,
-      include: { patient: true },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.auditLog.findMany({
-      take: 6,
-      orderBy: { createdAt: "desc" },
-      include: { patient: true },
-    }),
-  ]);
+  } = getDashboardStats();
 
   return (
     <div className="flex-1 flex min-h-[calc(100vh-4rem)] bg-slate-50">
@@ -180,11 +136,7 @@ export default async function DashboardPage() {
                 Patient profiles, intake status, and recent documentation runs
               </p>
             </div>
-
-            <Link
-              href="/patients/new"
-              className="text-xs font-semibold text-sky-700 hover:text-sky-900"
-            >
+            <Link href="/patients/new" className="text-xs font-semibold text-sky-700 hover:text-sky-900">
               + Add Patient
             </Link>
           </div>
@@ -216,17 +168,11 @@ export default async function DashboardPage() {
                           {patient.patientId}
                         </Link>
                       </td>
-                      <td className="py-3 px-4 font-semibold text-slate-900">
-                        {patient.name || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-slate-600">
-                        {patient.age} y / {patient.sex}
-                      </td>
+                      <td className="py-3 px-4 font-semibold text-slate-900">{patient.name || "—"}</td>
+                      <td className="py-3 px-4 text-slate-600">{patient.age} y / {patient.sex}</td>
                       <td className="py-3 px-4 text-slate-700">
                         {lastReport ? (
-                          <span className="truncate max-w-xs block font-medium">
-                            {lastReport.title}
-                          </span>
+                          <span className="truncate max-w-xs block font-medium">{lastReport.title}</span>
                         ) : (
                           <span className="text-slate-400">No reports uploaded</span>
                         )}
@@ -256,15 +202,11 @@ export default async function DashboardPage() {
 
         {/* 2-COLUMN SECTION: Recent Reports & Audit Stream */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: Recent Reports with Review Actions */}
+          {/* Left: Recent Reports */}
           <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Recent Medical Reports</h3>
-                <p className="text-xs text-slate-500">
-                  Uploaded documents processed through the extraction pipeline
-                </p>
-              </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Recent Medical Reports</h3>
+              <p className="text-xs text-slate-500">Uploaded documents processed through the extraction pipeline</p>
             </div>
 
             <div className="space-y-3">
@@ -286,7 +228,7 @@ export default async function DashboardPage() {
                   </div>
 
                   <Link
-                    href={`/reports/${report.id}/review`}
+                    href={`/patients/${report.patientId}`}
                     className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-[#0B192C] text-white px-3 py-1.5 text-xs font-semibold hover:bg-[#1E3E62] transition-colors"
                   >
                     <span>Review</span>
@@ -297,13 +239,11 @@ export default async function DashboardPage() {
             </div>
           </div>
 
-          {/* Right: Live Activity & Audit Stream */}
+          {/* Right: Audit Stream */}
           <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Activity & Audit Trail</h3>
-                <p className="text-xs text-slate-500">Recent verification and system actions</p>
-              </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Activity & Audit Trail</h3>
+              <p className="text-xs text-slate-500">Recent verification and system actions</p>
             </div>
 
             <div className="space-y-3">
@@ -319,9 +259,7 @@ export default async function DashboardPage() {
                     Target: {log.objectType} {log.patient?.name ? `(${log.patient.name})` : ""}
                   </p>
                   {log.newValue && (
-                    <p className="text-[10px] text-emerald-700 font-mono">
-                      New: {log.newValue}
-                    </p>
+                    <p className="text-[10px] text-emerald-700 font-mono">New: {log.newValue}</p>
                   )}
                 </div>
               ))}
