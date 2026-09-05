@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String?
+  passwordHash String
+  role         String     @default("CLINICIAN") // CLINICIAN, AUDITOR, ADMIN
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  auditLogs    AuditLog[]
+}
+
+model Patient {
+  id             String               @id @default(cuid())
+  patientId      String               @unique // e.g. PT-10482
+  name           String?              // Optional / Configurable
+  age            Int
+  sex            String               // Male, Female, Other
+  symptoms       String?              // Provided by user
+  conditions     String?              // Provided by user
+  allergies      String?              // Provided by user
+  medications    String?              // Provided by user
+  otherInfo      String?              // Provided by user
+  reviewStatus   String               @default("PENDING_REVIEW") // PENDING_REVIEW, PARTIALLY_VERIFIED, VERIFIED
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  reports        MedicalReport[]
+  conflicts      Conflict[]
+  timelineEvents TimelineEvent[]
+  auditLogs      AuditLog[]
+}
+
+model MedicalReport {
+  id               String               @id @default(cuid())
+  patientId        String
+  patient          Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  title            String
+  fileName         String
+  fileSize         Int
+  mimeType         String               @default("application/pdf")
+  fileData         String?              // Base64 encoded or content text for storage
+  rawText          String?
+  reportDate       DateTime?
+  processingStatus String               @default("COMPLETED") // UPLOADING, PROCESSING, COMPLETED, FAILED
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  observations     MedicalObservation[]
+  conflictsAsA     Conflict[]           @relation("ReportA")
+  conflictsAsB     Conflict[]           @relation("ReportB")
+}
+
+model MedicalObservation {
+  id                    String        @id @default(cuid())
+  reportId              String
+  report                MedicalReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  testName              String
+  value                 String
+  unit                  String?
+  referenceText         String?       // "12.0 - 16.0" or "Not provided in source"
+  referenceLow          Float?
+  referenceHigh         Float?
+  status                String        @default("NOT_ASSESSED") // LOW, NORMAL, HIGH, NOT_ASSESSED
+  observationNote       String?
+  reportDate            DateTime?
+  sourcePage            Int?          @default(1)
+  sourceExcerpt         String?       // Exact text snippet from the document
+  confidence            Float         @default(0.95) // e.g. 0.98
+  verificationStatus    String        @default("PENDING_REVIEW") // PENDING_REVIEW, VERIFIED, EDITED, REJECTED, FLAGGED
+  
+  // Historical / Audit fields to prevent overwriting
+  originalValue         String?
+  originalUnit          String?
+  originalReferenceText String?
+  editedBy              String?
+  editedAt              DateTime?
+  provenance            String        @default("SOURCE_EXTRACTED") // USER_PROVIDED, SOURCE_EXTRACTED, AI_GENERATED, DERIVED_FROM_SOURCE_RANGE, HUMAN_VERIFIED
+  
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+}
+
+model Conflict {
+  id          String        @id @default(cuid())
+  patientId   String
+  patient     Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reportAId   String?
+  reportA     MedicalReport? @relation("ReportA", fields: [reportAId], references: [id], onDelete: SetNull)
+  reportBId   String?
+  reportB     MedicalReport? @relation("ReportB", fields: [reportBId], references: [id], onDelete: SetNull)
+  category    String        // ALLERGY, MEDICATION, AGE, TEST_VALUE, REFERENCE_RANGE, DEMOGRAPHIC
+  description String
+  valueA      String?
+  valueB      String?
+  status      String        @default("NEEDS_REVIEW") // NEEDS_REVIEW, RESOLVED, DISMISSED
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+}
+
+model TimelineEvent {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  eventType   String   // PATIENT_CREATED, REPORT_UPLOADED, REPORT_PROCESSED, EXTRACTION_COMPLETED, HUMAN_VERIFICATION, REPORT_EDITED, SUMMARY_GENERATED, CONFLICT_DETECTED
+  title       String
+  description String
+  metadata    String?  // JSON string
+  actor       String   @default("System")
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  patientId     String?
+  patient       Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  action        String   // VERIFY_OBSERVATION, EDIT_OBSERVATION, REJECT_OBSERVATION, UPLOAD_REPORT, CREATE_PATIENT, GENERATE_SUMMARY, RESOLVE_CONFLICT
+  objectType    String   // Observation, Report, Patient, Conflict
+  objectId      String
+  previousValue String?
+  newValue      String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+}
