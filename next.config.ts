@@ -9,8 +9,6 @@ const nextConfig: NextConfig = {
   },
   webpack: (config, { isServer }) => {
     if (isServer) {
-      // Prevent pdf-parse from being bundled — it reads test files from disk at require-time
-      // which causes Vercel build failures. It is handled via serverExternalPackages above.
       config.externals = [...(config.externals || []), "pdf-parse"];
     }
     return config;
